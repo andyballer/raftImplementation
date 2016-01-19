@@ -1,0 +1,111 @@
+package edu.duke.raft;
+
+import java.util.Timer;
+
+public class LeaderMode extends RaftMode {
+
+	Timer heartbeatTimer;
+	int heartbeatTimerID = 14;
+	int term;
+
+	int highestCommitted;
+
+  public void go () {
+	 synchronized (mLock) {
+    	term = mConfig.getCurrentTerm();
+    	System.out.println ("S" + 
+			  mID + 
+			  "." + 
+			  term + 
+			  ": switched to leader mode.");
+
+    	sendHeartbeats();
+        // The ID for the heartbeat timer = 14.
+        heartbeatTimer = scheduleTimer(HEARTBEAT_INTERVAL, heartbeatTimerID);
+        
+        highestCommitted = mLog.getLastIndex();
+    }
+  }
+
+  // @param candidate’s term
+  // @param candidate requesting vote
+  // @param index of candidate’s last log entry
+  // @param term of candidate’s last log entry
+  // @return 0, if server votes for candidate; otherwise, server's
+  // current term
+  public int requestVote (int candidateTerm,
+			  int candidateID,
+			  int lastLogIndex,
+			  int lastLogTerm) {
+    synchronized (mLock) {
+    	
+    	if (candidateTerm > term) {
+    		mConfig.setCurrentTerm(candidateTerm, 0);
+    		heartbeatTimer.cancel();
+    		RaftServerImpl.setMode(new FollowerMode());
+    	} 
+    	
+    	return term;
+    }
+  }
+  
+
+  // @param leader’s term
+  // @param current leader
+  // @param index of log entry before entries to append
+  // @param term of log entry before entries to append
+  // @param entries to append (in order of 0 to append.length-1)
+  // @param index of highest committed entry
+  // @return 0, if server appended entries; otherwise, server's
+  // current term
+  public int appendEntries (int leaderTerm,
+			    int leaderID,
+			    int prevLogIndex,
+			    int prevLogTerm,
+			    Entry[] entries,
+			    int leaderCommit) {
+    synchronized (mLock) {
+    	
+    	mLog.insert(entries, prevLogIndex, prevLogTerm);
+    	
+    	for (int i=1; i<=mConfig.getNumServers(); i++) {
+    		if (i != mID) {
+    			remoteAppendEntries(i, term, mID, prevLogIndex, prevLogTerm, entries, highestCommitted);
+    		}
+    	}
+    	
+    	return term;
+    }
+  }
+  
+  // @return 0, if the server sent a heartbeat; otherwise, server's
+  // current term
+  private void sendHeartbeats() {
+	    Entry[] empty = new Entry[0];
+	    
+	    // Is the highest index in leader's log the highest committed index?
+	    for (int i=1; i<=mConfig.getNumServers(); i++) {
+	    	if (i != mID) {
+	    		remoteAppendEntries(i, term, mID, mLog.getLastIndex(), mLog.getLastTerm(), empty, highestCommitted);
+	    	}
+	    }
+  }
+  
+  // @param id of the timer that timed out
+  public void handleTimeout (int timerID) {
+    synchronized (mLock) {
+
+      if (timerID == heartbeatTimerID) {
+    	 sendHeartbeats();
+    	 
+    	 heartbeatTimer.cancel();
+    	 // Reset the heartbeat timer.
+    	 heartbeatTimer = scheduleTimer(HEARTBEAT_INTERVAL, heartbeatTimerID);
+      }
+      
+    }
+  }
+
+}
+
+
